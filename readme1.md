@@ -61,7 +61,7 @@ The data moves through layers, like water through filters. Each layer is cleaner
 * 5 business tables are loaded: hospitals, doctors, patients, insurance providers, lab results.
 * Only new data is copied each day (incremental loading), which saves time and cost.
 * The pipeline is **configuration-driven**: adding a new table means adding a row to a settings table, not writing new code.
-* Reruns are made safe so data is not counted twice (work in progress for lab results, see Part 2).
+* Reruns are safe: if a load runs twice, records are updated instead of being added a second time.
 * 3 gold reports are built from a written mapping specification.
 * Monitoring: a run logbook and an automatic e-mail report.
 * Code is version controlled in GitHub, with changes reviewed through pull requests.
@@ -147,7 +147,7 @@ Adding a new table or report means adding a row to `table_config`; no pipeline c
 | Notebook | Layer | Purpose |
 | --- | --- | --- |
 | `landing_to_bronze` | Bronze | Reads the raw files (CSV or Parquet) for one batch and appends them to bronze with a batch time stamp |
-| `Silver/bronze_to_silver_upsert` | Silver | Writes the batch to silver using FULL, APPEND or MERGE (upsert), safe to rerun |
+| `Silver/bronze_to_silver_upsert` | Silver | Writes the batch to silver: full replace for master data (hospitals, doctors, insurance providers), upsert for patients and lab results. Safe to rerun |
 | `Prepare calendar table` | Silver | Date dimension (1940-2030) with built-in data quality tests |
 | `Gold/NB_patient_360` | Gold | One row per patient: hospital, insurance and lab test summary |
 | `Gold/NB_hospital_daily_summary` | Gold | One row per hospital per day: test volumes, abnormal/critical rates, day-over-day trend |
@@ -157,13 +157,25 @@ Gold tables were designed from a source-to-target mapping spreadsheet (`Gold/stt
 
 ### 2.5 Source tables and load strategy
 
-| Source | Table | Load strategy |
-| --- | --- | --- |
-| Neon PostgreSQL | hospitals | FULL (full reload each run) |
-| Neon PostgreSQL | doctors | FULL |
-| Neon PostgreSQL | patients | MERGE (upsert on `patient_id`, incremental on `updated_at`) |
-| ADLS CSV | insurance_providers | FULL |
-| ADLS CSV | lab_results | APPEND, incremental on `reported_at` (the upsert notebook turns this into a MERGE on `lab_result_id` to prevent duplicates) |
+The pipeline supports three ways of writing data to silver:
+
+| Load type | In plain words |
+| --- | --- |
+| FULL | Replace the whole table with the latest copy. Used for small master data tables |
+| APPEND | Add every incoming row to the end of the table |
+| MERGE (upsert) | If the record already exists, update it; if it is new, add it. Records are matched on a key (for example `patient_id`) |
+
+How each table is loaded:
+
+| Source | Table | Load type | Only new data copied? |
+| --- | --- | --- | --- |
+| Neon PostgreSQL | hospitals | FULL | No, full copy each run |
+| Neon PostgreSQL | doctors | FULL | No, full copy each run |
+| Neon PostgreSQL | patients | MERGE on `patient_id` | Yes, rows changed since last run (`updated_at`) |
+| ADLS CSV | insurance_providers | FULL | No, full copy each run |
+| ADLS CSV | lab_results | MERGE on `lab_result_id` (see note) | Yes, files changed since last run |
+
+Note: the control table still lists `lab_results` as APPEND. Appending created duplicate lab tests, so the silver notebook now always upserts `lab_results`. Updating the control table to MERGE is a planned clean-up (see Next steps).
 
 The source data was generated with SQL scripts (seed of 50 hospitals, ~500 doctors, ~5,000 patients), followed by incremental change scripts with new and updated records to test the incremental and upsert logic.
 
@@ -171,12 +183,12 @@ The source data was generated with SQL scripts (seed of 50 hospitals, ~500 docto
 
 * **Metadata-driven design**: one generic pipeline and generic notebooks serve all tables, driven by `ctrl.table_config`.
 * **Incremental loading** with watermarks (Postgres `WHERE` filter, file modified-date filter).
-* **Three load strategies**: FULL, APPEND and MERGE (upsert).
-* **Idempotency (safe reruns)**: empty-batch guards, `REPLACE WHERE` for append, ordered MERGE for lab results.
+* **Three load types**: FULL, APPEND and MERGE (upsert), chosen per table in the control table.
+* **Safe reruns (idempotency)**: running the same load twice gives the same result. Empty loads are skipped, upserts update instead of duplicating, and older data can never overwrite newer lab results.
 * **Audit logging and alerting**: per-table status and row counts in `ctrl.audit_log`, and an e-mail per run.
 * **Secrets in Key Vault**, not in code (for database password and Databricks token).
 * **Testing in isolation**: `bronze_test` and `silver_test` schemas so tests never change real data; calendar data quality tests.
-* **Git workflow**: feature branches and pull requests (PR #1 `feature_1`, PR #2 `bronze_to_silver_upsert_only`), ADF Git integration with `adf_publish` branch.
+* **Git workflow**: feature branches and pull requests (PR #1 to PR #3), ADF Git integration with `adf_publish` branch.
 
 ### 2.7 Project timeline
 
@@ -193,14 +205,14 @@ The source data was generated with SQL scripts (seed of 50 hospitals, ~500 docto
 
 | Problem | Cause | Solution |
 | --- | --- | --- |
-| `lab_results` APPEND failed with TABLE_OR_VIEW_NOT_FOUND | Silver table did not exist yet | APPEND and MERGE now create the table on first run |
-| `landing_to_bronze` failed with PATH_NOT_FOUND | Copy succeeded but wrote 0 files because no source file changed since the watermark, so the folder was never created | Notebook checks the folder and exits cleanly with 0; silver notebook also exits when the batch is empty |
-| Duplicate lab results in silver | ADF Copy re-sent the same full CSV, and APPEND added it again | New `bronze_to_silver_upsert` (MERGE on `lab_result_id`) and one-time dedupe notebook |
+| First load of a new table failed ("table not found") | The silver table did not exist yet | The notebook now creates the table automatically on the first run |
+| Pipeline failed on days with no new data ("path not found") | When nothing changed in the source, ADF copied 0 files, so the expected folder was never created | The notebooks now check for new data first and skip the table cleanly if there is none |
+| Duplicate lab tests in silver | The same lab results file was delivered again and APPEND added the rows a second time | Lab results are now upserted on `lab_result_id`, plus a one-time notebook to remove the existing duplicates |
 
 ### 2.9 Next steps
 
 * **[OPEN ISSUE]** Point ADF to the notebooks' new `Silver/` location and to the upsert version.
-* **[OPEN ISSUE]** Run the one-time clean-up of duplicate lab results in silver.
+* **[OPEN ISSUE]** Run the one-time clean-up of duplicate lab results in silver, then change `lab_results` to MERGE (key `lab_result_id`) in the control table.
 * **[OPEN ISSUE]** Fix the audit log run id in the source-to-silver pipeline and use a 24-hour batch time stamp.
 * **[OPEN ISSUE]** Move the Logic App URL into Key Vault.
 * Add a dashboard on top of the gold tables.
