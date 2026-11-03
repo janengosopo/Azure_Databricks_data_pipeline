@@ -2,6 +2,15 @@
 
 ## What problem does it solve?
 
+**Healthpoint** is a hypothetical healthcare group whose data is spread across multiple systems: patient, doctor and hospital records in PostgreSQL, and insurance and lab test data in Azure Storage.
+This makes it difficult to get a complete view of patients, hospitals and lab results.
+
+I built an automated data pipeline using Azure Data Factory and Databricks to bring this data together, clean it and turn it into analytics-ready data.
+The resulting data products support use cases such as:
+* Patient overview: Patient profiles, hospital visits, insurance coverage and abnormal lab results.
+* Hospital performance: Daily patient volumes, lab tests and doctor counts.
+* Lab trends: Monthly trends in abnormal and critical results by test type.
+
 **Healthpoint** is a hypothetical healthcare group with data spreads over different places: a database (Neon PostgreSQL) with hospitals, doctors and patients, and files (CSV in Azure storage) with insurance providers and lab test results. Looking at this data together is hard because it is stored in different systems and formats.
 
 This project brings all the data into one place every day, cleans it, and turns it into ready-to-use data products, for example:
@@ -27,16 +36,16 @@ This project brings all the data into one place every day, cleans it, and turns 
 
 ![CareSync healthcare pipeline architecture](Architecture%20diagram.jpg)
 
-## Key design decisions
+## Design decisions
 
-* **Metadata-driven design**: one generic pipeline and generic notebooks serve all tables, driven by `ctrl.table_config`.
-* **Incremental loading** with watermarks (Postgres `WHERE` filter, file modified-date filter).
-* **Three load types**: FULL, APPEND and MERGE (upsert), chosen per table in the control table.
-* **Safe reruns (idempotency)**: running the same load twice gives the same result. Empty loads are skipped, upserts update instead of duplicating, and older data can never overwrite newer lab results.
-* **Audit logging and alerting**: per-table status and row counts in `ctrl.audit_log`, and an e-mail per run.
-* **Secrets in Key Vault**, not in code (for database password and Databricks token).
-* **Testing in isolation**: `bronze_test` and `silver_test` schemas so tests never change real data; calendar data quality tests.
-* **Git workflow**: feature branches and pull requests (PR #1 to PR #3), ADF Git integration with `adf_publish` branch.
+- **Metadata-driven:** One reusable pipeline handles multiple tables, with loading rules managed through a control table.
+- **Incremental loading:** Watermarks track changes, so only new or updated data is processed.
+- **Flexible loading:** Supports FULL and MERGE (upsert) strategies depending on the data.
+- **Reliable processing:** Safe reruns prevent duplicates, empty loads are skipped, and older records cannot overwrite newer lab results.
+- **Monitoring and alerting:** Audit logs track pipeline status and record counts. Email alerts report each run.
+- **Secure access:** Azure Key Vault stores database credentials and Databricks tokens.
+- **Data quality:** Separate test schemas allow testing without affecting production data.
+- **Version control:** Feature branches, pull requests and ADF Git integration support controlled development and deployment.
 
 ## Load strategy
 
