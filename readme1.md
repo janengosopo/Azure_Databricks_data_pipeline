@@ -23,8 +23,9 @@ This project brings all the data into one place every day, cleans it, and turns 
 | Alerts | Azure Logic App (e-mail) |
 | Version control | GitHub (one repo for Databricks, one for ADF) |
 
-##  Architecture overview
+## Architecture overview
 
+![CareSync healthcare pipeline architecture](Architecture%20diagram.jpg)
 
 ## Key design decisions
 
@@ -48,7 +49,7 @@ This project brings all the data into one place every day, cleans it, and turns 
 | 5 | `PL_silver_to_gold` | Runs one gold notebook per report |
 | 6 | `PL_send_email` | Reads the audit log for the run and sends a Success/Failed e-mail via Logic App |
 
-Three control tables in Azure SQL (schema `ctrl`) drive the pipeline. They are created and seeded with SQL scripts:
+Three control tables in Azure SQL (schema `ctrl`) drive the pipeline. They are created and filled with their starting settings using SQL scripts:
 
 | Control table | What it holds |
 | --- | --- |
@@ -58,13 +59,13 @@ Three control tables in Azure SQL (schema `ctrl`) drive the pipeline. They are c
 
 Adding a new table or report means adding a row to `table_config`; no pipeline change is needed.
 
-##  Databricks notebooks
+## Databricks notebooks
 
 | Notebook | Layer | Purpose |
 | --- | --- | --- |
 | `landing_to_bronze` | Bronze | Reads the raw files (CSV or Parquet) for one batch and appends them to bronze with a batch time stamp |
 | `Silver/bronze_to_silver_upsert` | Silver | Writes the batch to silver: full replace for master data (hospitals, doctors, insurance providers), upsert for patients and lab results. Safe to rerun |
-| `Prepare calendar table` | Silver | Date dimension (1940-2030) with built-in data quality tests |
+| `Bronze/Prepare calendar table` | Silver | Date dimension (1940-2030) with built-in data quality tests |
 | `Gold/NB_patient_360` | Gold | One row per patient: hospital, insurance and lab test summary |
 | `Gold/NB_hospital_daily_summary` | Gold | One row per hospital per day: test volumes, abnormal/critical rates, day-over-day trend |
 | `Gold/NB_lab_test_trends` | Gold | One row per test type per month: abnormal/critical rates, month-over-month trend |
@@ -79,10 +80,6 @@ Gold tables were designed from a source-to-target mapping spreadsheet (`Gold/stt
 | Neon PostgreSQL | doctors | FULL | No, full copy each run |
 | Neon PostgreSQL | patients | MERGE on `patient_id` | Yes, rows changed since last run (`updated_at`) |
 | ADLS CSV | insurance_providers | FULL | No, full copy each run |
-| ADLS CSV | lab_results | MERGE on `lab_result_id` (see note) | Yes, files changed since last run |
+| ADLS CSV | lab_results | MERGE on `lab_result_id` | Yes, files changed since last run |
 
-The source data was generated with SQL scripts (seed of 50 hospitals, ~500 doctors, ~5,000 patients), followed by incremental change scripts with new and updated records to test the incremental and upsert logic.
-
-
-
-
+The source data was generated with SQL scripts (starting data of 50 hospitals, ~500 doctors, ~5,000 patients), followed by incremental change scripts with new and updated records to test the incremental and upsert logic.
