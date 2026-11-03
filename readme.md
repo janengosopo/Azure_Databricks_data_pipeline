@@ -1,8 +1,8 @@
-# Healthcare Data Pipeline
+# Azure-Databricks Data Pipeline
 
 ## What problem does it solve?
 
-**CareSync Health Network** is a hypothetical healthcare group with data spread over different places: a database (Neon PostgreSQL) with hospitals, doctors and patients, and files (CSV in Azure storage) with insurance providers and lab test results. Looking at this data together is hard because it is stored in different systems and formats.
+**Healthpoint** is a hypothetical healthcare group with data spread over different places: a database (Neon PostgreSQL) with hospitals, doctors and patients, and files (CSV in Azure storage) with insurance providers and lab test results. Looking at this data together is hard because it is stored in different systems and formats.
 
 This project brings all the data into one place every day, cleans it, and turns it into ready-to-use reports, for example:
 
@@ -15,7 +15,7 @@ This project brings all the data into one place every day, cleans it, and turns 
 | Area | Technology |
 | --- | --- |
 | Orchestration | Azure Data Factory |
-| Processing | Azure Databricks (PySpark, Spark SQL), Delta Lake, Unity Catalog |
+| Processing | Azure Databricks (PySpark, Spark SQL) |
 | Storage | Azure Data Lake Storage Gen2 |
 | Sources | Neon PostgreSQL (cloud database), CSV files in ADLS |
 | Metadata and logging | Azure SQL Database |
