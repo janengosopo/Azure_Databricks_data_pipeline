@@ -2,9 +2,9 @@
 
 ## What problem does it solve?
 
-**Healthpoint** is a hypothetical healthcare group with data spread over different places: a database (Neon PostgreSQL) with hospitals, doctors and patients, and files (CSV in Azure storage) with insurance providers and lab test results. Looking at this data together is hard because it is stored in different systems and formats.
+**Healthpoint** is a hypothetical healthcare group with data spreads over different places: a database (Neon PostgreSQL) with hospitals, doctors and patients, and files (CSV in Azure storage) with insurance providers and lab test results. Looking at this data together is hard because it is stored in different systems and formats.
 
-This project brings all the data into one place every day, cleans it, and turns it into ready-to-use reports, for example:
+This project brings all the data into one place every day, cleans it, and turns it into ready-to-use data products, for example:
 
 * a full profile of every patient (age, hospital, insurance, how many lab tests, how many were abnormal or critical),
 * a daily summary per hospital (how many tests, patients and doctors, and how this changes day to day),
@@ -38,6 +38,18 @@ This project brings all the data into one place every day, cleans it, and turns 
 * **Testing in isolation**: `bronze_test` and `silver_test` schemas so tests never change real data; calendar data quality tests.
 * **Git workflow**: feature branches and pull requests (PR #1 to PR #3), ADF Git integration with `adf_publish` branch.
 
+## Load strategy
+
+| Source | Table | Load type | Only new data copied? |
+| --- | --- | --- | --- |
+| Neon PostgreSQL | hospitals | FULL | No, full copy each run |
+| Neon PostgreSQL | doctors | FULL | No, full copy each run |
+| Neon PostgreSQL | patients | MERGE on `patient_id` | Yes, rows changed since last run (`updated_at`) |
+| ADLS CSV | insurance_providers | FULL | No, full copy each run |
+| ADLS CSV | lab_results | MERGE on `lab_result_id` | Yes, files changed since last run |
+
+The source data was generated with SQL scripts (starting data of 50 hospitals, ~500 doctors, ~5,000 patients), followed by incremental change scripts with new and updated records to test the incremental and upsert logic.
+
 ## How the pipeline runs (orchestration in ADF)
 
 | Step | ADF pipeline | What happens |
@@ -49,7 +61,7 @@ This project brings all the data into one place every day, cleans it, and turns 
 | 5 | `PL_silver_to_gold` | Runs one gold notebook per report |
 | 6 | `PL_send_email` | Reads the audit log for the run and sends a Success/Failed e-mail via Logic App |
 
-Three control tables in Azure SQL (schema `ctrl`) drive the pipeline. They are created and filled with their starting settings using SQL scripts:
+Three control tables in Azure SQL drive the pipeline. They are created and filled with their starting settings using SQL scripts:
 
 | Control table | What it holds |
 | --- | --- |
@@ -72,14 +84,3 @@ Adding a new table or report means adding a row to `table_config`; no pipeline c
 
 Gold tables were designed from a source-to-target mapping spreadsheet (`Gold/sttm_silver_to_gold.xlsx`).
 
-## Load strategy
-
-| Source | Table | Load type | Only new data copied? |
-| --- | --- | --- | --- |
-| Neon PostgreSQL | hospitals | FULL | No, full copy each run |
-| Neon PostgreSQL | doctors | FULL | No, full copy each run |
-| Neon PostgreSQL | patients | MERGE on `patient_id` | Yes, rows changed since last run (`updated_at`) |
-| ADLS CSV | insurance_providers | FULL | No, full copy each run |
-| ADLS CSV | lab_results | MERGE on `lab_result_id` | Yes, files changed since last run |
-
-The source data was generated with SQL scripts (starting data of 50 hospitals, ~500 doctors, ~5,000 patients), followed by incremental change scripts with new and updated records to test the incremental and upsert logic.
