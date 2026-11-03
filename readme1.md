@@ -1,21 +1,8 @@
-# Healthcare Data Pipeline - Project Documentation
+# Healthcare Data Pipeline
 
-Status: development (`env = dev`). Last reviewed: 3 November 2026.
+## What problem does it solve?
 
-This document explains, end to end, what the healthcare data pipeline does and how it is built. It has two parts:
-
-* **Part 1 - Project in plain words**: for readers without a technical background.
-* **Part 2 - Technical details**: for engineers and technical reviewers.
-
-Items we could not confirm from the code are marked **[NOT DOCUMENTED]**. Known problems are marked **[OPEN ISSUE]**.
-
----
-
-## Part 1 - The project in plain words
-
-### What problem does it solve?
-
-**CareSync Health Network** is a healthcare group with data spread over different places: a database (Neon PostgreSQL) with hospitals, doctors and patients, and files (CSV in Azure storage) with insurance providers and lab test results. Looking at this data together is hard because it is stored in different systems and formats.
+**CareSync Health Network** is a hypothetical healthcare group with data spread over different places: a database (Neon PostgreSQL) with hospitals, doctors and patients, and files (CSV in Azure storage) with insurance providers and lab test results. Looking at this data together is hard because it is stored in different systems and formats.
 
 This project brings all the data into one place every day, cleans it, and turns it into ready-to-use reports, for example:
 
@@ -23,67 +10,7 @@ This project brings all the data into one place every day, cleans it, and turns 
 * a daily summary per hospital (how many tests, patients and doctors, and how this changes day to day),
 * a monthly trend per lab test type (is the rate of abnormal results going up or down?).
 
-### How does it work? (the "medallion" idea)
-
-The data moves through layers, like water through filters. Each layer is cleaner than the one before:
-
-| Layer | Simple meaning | What happens here |
-| --- | --- | --- |
-| Source | Where the data is born | Neon PostgreSQL database (`neondb`, schema `public`): tables `hospitals`, `doctors`, `patients`; and CSV files in Azure storage: `insurance_providers`, `lab_results` |
-| Landing | The "mailbox" | Raw copies of the data are dropped here, one folder per run |
-| Bronze | The "archive" | Every delivery is kept as it arrived, with a time stamp. Nothing is deleted |
-| Silver | The "clean library" | One up-to-date, clean version of each record |
-| Gold | The "reports shelf" | Business-ready tables that answer real questions |
-
-### Who does what?
-
-* **Azure Data Factory (ADF)** is the "conductor". It starts the pipeline every morning, copies data from the sources, and tells Databricks what to do next.
-* **Databricks** is the "workshop". It reads the raw data, cleans it and builds the reports.
-* **Azure SQL Database** is the "control room". It holds the list of tables to load, how each one should be loaded, and a logbook of every run.
-* **Azure Key Vault** is the "safe". It stores passwords and access tokens so they are not written in the code.
-* **Azure Logic App** is the "messenger". It sends an e-mail after each run saying whether everything worked.
-* **GitHub** holds all code, with version history and reviewed changes (pull requests).
-
-### A day in the life of the pipeline
-
-1. Every day at 05:00 (Finland/Eastern European time) the pipeline starts automatically.
-2. It checks the control room for the list of tables to load.
-3. For each table it copies only the new or changed data from the source into the landing area.
-4. Databricks stores that delivery in the archive (bronze).
-5. Databricks updates the clean library (silver) so it holds the newest version of each record.
-6. When all tables are done, Databricks rebuilds the three reports (gold).
-7. Every step is written into the logbook (success or failure, and how many records).
-8. An e-mail is sent with the overall result (Success or Failed) and a status table.
-
-### What has been achieved
-
-* Data from 2 different source types (database and files) is loaded automatically every day.
-* 5 business tables are loaded: hospitals, doctors, patients, insurance providers, lab results.
-* Only new data is copied each day (incremental loading), which saves time and cost.
-* The pipeline is **configuration-driven**: adding a new table means adding a row to a settings table, not writing new code.
-* Reruns are safe: if a load runs twice, records are updated instead of being added a second time.
-* 3 gold reports are built from a written mapping specification.
-* Monitoring: a run logbook and an automatic e-mail report.
-* Code is version controlled in GitHub, with changes reviewed through pull requests.
-
-### Current size of the data (3 Nov 2026)
-
-| Report / table | Rows |
-| --- | --- |
-| Patients (clean) | 5,003 |
-| Doctors (clean) | 502 |
-| Hospitals (clean) | 51 |
-| Insurance providers (clean) | 25 |
-| Unique lab tests (clean) | 8,228 |
-| Gold: patient profile (`patient_360`) | 5,003 |
-| Gold: hospital daily summary | 6,691 |
-| Gold: lab test monthly trends | 70 |
-
----
-
-## Part 2 - Technical details
-
-### 2.1 Technology stack
+## Technology stack
 
 | Area | Technology |
 | --- | --- |
@@ -96,32 +23,21 @@ The data moves through layers, like water through filters. Each layer is cleaner
 | Alerts | Azure Logic App (e-mail) |
 | Version control | GitHub (one repo for Databricks, one for ADF) |
 
-### 2.2 Architecture overview
+##  Architecture overview
 
-```
-   Neon PostgreSQL            CSV files (ADLS)
-  (hospitals, doctors,      (insurance providers,
-      patients)                 lab results)
-          \                        /
-           \                      /
-            v                    v
-     Azure Data Factory  -- copy new data -->  LANDING (raw files)
-     (schedule, control,                          |
-      logging, alerts)                            v  Databricks
-            |                                  BRONZE  (history of every load)
-            |                                     |
-            |                                     v  Databricks
-            |                                  SILVER  (clean, latest records)
-            |                                     |
-            |                                     v  Databricks
-            |                                  GOLD    (3 business reports)
-            v
-   Azure SQL control tables  --->  Logic App  --->  status e-mail
-```
 
-All Databricks tables live in Unity Catalog under one catalog (`adb_healthcare`) with one schema per layer.
+## Key design decisions
 
-### 2.3 How the pipeline runs (orchestration in ADF)
+* **Metadata-driven design**: one generic pipeline and generic notebooks serve all tables, driven by `ctrl.table_config`.
+* **Incremental loading** with watermarks (Postgres `WHERE` filter, file modified-date filter).
+* **Three load types**: FULL, APPEND and MERGE (upsert), chosen per table in the control table.
+* **Safe reruns (idempotency)**: running the same load twice gives the same result. Empty loads are skipped, upserts update instead of duplicating, and older data can never overwrite newer lab results.
+* **Audit logging and alerting**: per-table status and row counts in `ctrl.audit_log`, and an e-mail per run.
+* **Secrets in Key Vault**, not in code (for database password and Databricks token).
+* **Testing in isolation**: `bronze_test` and `silver_test` schemas so tests never change real data; calendar data quality tests.
+* **Git workflow**: feature branches and pull requests (PR #1 to PR #3), ADF Git integration with `adf_publish` branch.
+
+## How the pipeline runs (orchestration in ADF)
 
 | Step | ADF pipeline | What happens |
 | --- | --- | --- |
@@ -142,7 +58,7 @@ Three control tables in Azure SQL (schema `ctrl`) drive the pipeline. They are c
 
 Adding a new table or report means adding a row to `table_config`; no pipeline change is needed.
 
-### 2.4 Databricks notebooks
+##  Databricks notebooks
 
 | Notebook | Layer | Purpose |
 | --- | --- | --- |
@@ -155,17 +71,7 @@ Adding a new table or report means adding a row to `table_config`; no pipeline c
 
 Gold tables were designed from a source-to-target mapping spreadsheet (`Gold/sttm_silver_to_gold.xlsx`).
 
-### 2.5 Source tables and load strategy
-
-The pipeline supports three ways of writing data to silver:
-
-| Load type | In plain words |
-| --- | --- |
-| FULL | Replace the whole table with the latest copy. Used for small master data tables |
-| APPEND | Add every incoming row to the end of the table |
-| MERGE (upsert) | If the record already exists, update it; if it is new, add it. Records are matched on a key (for example `patient_id`) |
-
-How each table is loaded:
+## Load strategy
 
 | Source | Table | Load type | Only new data copied? |
 | --- | --- | --- | --- |
@@ -175,73 +81,8 @@ How each table is loaded:
 | ADLS CSV | insurance_providers | FULL | No, full copy each run |
 | ADLS CSV | lab_results | MERGE on `lab_result_id` (see note) | Yes, files changed since last run |
 
-Note: the control table still lists `lab_results` as APPEND. Appending created duplicate lab tests, so the silver notebook now always upserts `lab_results`. Updating the control table to MERGE is a planned clean-up (see Next steps).
-
 The source data was generated with SQL scripts (seed of 50 hospitals, ~500 doctors, ~5,000 patients), followed by incremental change scripts with new and updated records to test the incremental and upsert logic.
 
-### 2.6 Key design decisions
 
-* **Metadata-driven design**: one generic pipeline and generic notebooks serve all tables, driven by `ctrl.table_config`.
-* **Incremental loading** with watermarks (Postgres `WHERE` filter, file modified-date filter).
-* **Three load types**: FULL, APPEND and MERGE (upsert), chosen per table in the control table.
-* **Safe reruns (idempotency)**: running the same load twice gives the same result. Empty loads are skipped, upserts update instead of duplicating, and older data can never overwrite newer lab results.
-* **Audit logging and alerting**: per-table status and row counts in `ctrl.audit_log`, and an e-mail per run.
-* **Secrets in Key Vault**, not in code (for database password and Databricks token).
-* **Testing in isolation**: `bronze_test` and `silver_test` schemas so tests never change real data; calendar data quality tests.
-* **Git workflow**: feature branches and pull requests (PR #1 to PR #3), ADF Git integration with `adf_publish` branch.
 
-### 2.7 Project timeline
 
-| Date (2026) | Milestone |
-| --- | --- |
-| 22 Oct | Databricks repo created; first ingestion of Neon Postgres data to landing |
-| 26-27 Oct | Fixes: silver table auto-created on first APPEND/MERGE; notebooks skip safely when ADF copied no new files |
-| 27 Oct | Calendar table and 3 gold notebooks built from the STTM |
-| 28 Oct | PR #1 merged (`feature_1`) |
-| 29 Oct | E-mail notification pipeline (`PL_send_email`) built and published |
-| 30 Oct | Daily trigger `TGR_healthcare` added; upsert / rerun-safe silver notebook and dedupe notebook created, moved to `Silver/` folder; PR #2 merged into `main` |
-
-### 2.8 Challenges and how they were solved
-
-| Problem | Cause | Solution |
-| --- | --- | --- |
-| First load of a new table failed ("table not found") | The silver table did not exist yet | The notebook now creates the table automatically on the first run |
-| Pipeline failed on days with no new data ("path not found") | When nothing changed in the source, ADF copied 0 files, so the expected folder was never created | The notebooks now check for new data first and skip the table cleanly if there is none |
-| Duplicate lab tests in silver | The same lab results file was delivered again and APPEND added the rows a second time | Lab results are now upserted on `lab_result_id`, plus a one-time notebook to remove the existing duplicates |
-
-### 2.9 Next steps
-
-* **[OPEN ISSUE]** Point ADF to the notebooks' new `Silver/` location and to the upsert version.
-* **[OPEN ISSUE]** Run the one-time clean-up of duplicate lab results in silver, then change `lab_results` to MERGE (key `lab_result_id`) in the control table.
-* **[OPEN ISSUE]** Fix the audit log run id in the source-to-silver pipeline and use a 24-hour batch time stamp.
-* **[OPEN ISSUE]** Move the Logic App URL into Key Vault.
-* Add a dashboard on top of the gold tables.
-* Add CI/CD to deploy to test and production (only `dev` exists today).
-* Add the source and control table SQL scripts to the repo (today they are kept outside Git).
-* **[NOT DOCUMENTED]** CSV source folder layout, Logic App design and cluster setup are not stored in the repos yet.
-
-### 2.10 Repository layout
-
-```
-healthcare_adb_repo/            (Databricks)
-  landing_to_bronze
-  Prepare calendar table
-  Silver/
-    bronze_to_silver
-    bronze_to_silver_upsert
-    one_time_dedupe_silver_lab_results
-  Gold/
-    NB_patient_360
-    NB_hospital_daily_summary
-    NB_lab_test_trends
-    sttm_silver_to_gold.xlsx
-
-healthcare_adf_repo/            (Azure Data Factory)
-  pipeline/   PL_master, PL_source_to_silver_main, PL_source_to_silver_inner,
-              PL_silver_to_gold, PL_send_email, test
-  dataset/    DS_ADLS_Parquet, DS_CSV_binary, PostgreSqlTable1, AzureSqlTable1
-  linkedService/  LS_PostgreSql1, LS_AzureDatabricks1, LS_AzureKeyVault1,
-                  AzureSqlDatabase1, AzureDataLakeStorage1
-  trigger/    TGR_healthcare
-  factory/    adf-healthcare-01 (global parameters)
-```
